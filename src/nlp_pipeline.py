@@ -23,9 +23,19 @@ def truncate_text(text: str) -> str:
 
 
 def build_prompt(text: str) -> str:
-    return f"""You are a document analysis API. Analyze the following document text and return ONLY a valid JSON object with no extra explanation.
+    return f"""You are an information extraction system.
 
-The JSON must follow this structure:
+Return ONLY valid JSON.
+
+Rules:
+- Names = ONLY people (e.g., Ravi Kumar)
+- Organizations = companies, institutions (Google, Microsoft, universities)
+- Dates = any date expressions
+- Amounts = monetary values
+- Do NOT misclassify
+- If not present → return empty list
+
+JSON format:
 {{
   "summary": "",
   "entities": {{
@@ -34,13 +44,11 @@ The JSON must follow this structure:
     "organizations": [],
     "amounts": []
   }},
-  "sentiment": ""
+  "sentiment": "Positive/Neutral/Negative"
 }}
 
-Document text:
-\"\"\"
+Document:
 {text}
-\"\"\"
 """
 
 
@@ -106,13 +114,39 @@ def analyze_document(text: str) -> dict:
 
         result = safe_parse(raw)
 
+        # --- SAFE POST PROCESSING ---
+        try:
+            entities = result.get("entities", {})
+
+            names = entities.get("names", [])
+            orgs = entities.get("organizations", [])
+
+            common_org_keywords = [
+                "ltd", "inc", "university", "corp",
+                "google", "microsoft", "nvidia"
+            ]
+
+            filtered_names = []
+
+            for n in names:
+                if any(k in n.lower() for k in common_org_keywords):
+                    orgs.append(n)
+                else:
+                    filtered_names.append(n)
+
+            entities["names"] = filtered_names
+            entities["organizations"] = list(set(orgs))
+
+        except Exception as e:
+            print("[post-process error]", e)
+
         return {
             "summary": result.get("summary", ""),
             "entities": {
-                "names": result.get("entities", {}).get("names", []),
-                "dates": result.get("entities", {}).get("dates", []),
-                "organizations": result.get("entities", {}).get("organizations", []),
-                "amounts": result.get("entities", {}).get("amounts", [])
+                "names": entities.get("names", []),
+                "dates": entities.get("dates", []),
+                "organizations": entities.get("organizations", []),
+                "amounts": entities.get("amounts", [])
             },
             "sentiment": result.get("sentiment", "Neutral")
         }
