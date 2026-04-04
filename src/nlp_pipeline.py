@@ -22,20 +22,31 @@ def truncate_text(text: str) -> str:
     return text
 
 
+
 def build_prompt(text: str) -> str:
-    return f"""You are an information extraction system.
+    return f"""
+You are an expert document analysis system.
 
-Return ONLY valid JSON.
+Return ONLY valid JSON. No explanation. No markdown.
 
-Rules:
-- Names = ONLY people (e.g., Ravi Kumar)
-- Organizations = companies, institutions (Google, Microsoft, universities)
-- Dates = any date expressions
-- Amounts = monetary values
-- Do NOT misclassify
+TASK:
+1. Generate a detailed summary (2–4 sentences) including:
+   - main topic
+   - key people/organizations
+   - important facts
+
+2. Extract ALL entities:
+   - names → ONLY people (full names)
+   - organizations → companies, institutions, universities
+   - dates → any format
+   - amounts → monetary values
+
+STRICT RULES:
+- Do NOT skip entities
+- Do NOT misclassify (Google = organization, not name)
 - If not present → return empty list
 
-JSON format:
+JSON FORMAT:
 {{
   "summary": "",
   "entities": {{
@@ -47,7 +58,7 @@ JSON format:
   "sentiment": "Positive/Neutral/Negative"
 }}
 
-Document:
+DOCUMENT:
 {text}
 """
 
@@ -55,7 +66,6 @@ Document:
 def safe_parse(raw: str) -> dict:
     raw = raw.strip()
 
-    # remove markdown fences
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -114,31 +124,36 @@ def analyze_document(text: str) -> dict:
 
         result = safe_parse(raw)
 
-        # --- SAFE POST PROCESSING ---
-        try:
-            entities = result.get("entities", {})
+        
+        entities = result.get("entities") or {}
 
-            names = entities.get("names", [])
-            orgs = entities.get("organizations", [])
+        
+        fallback_dates = re.findall(r'\b\d{1,2}\s\w+\s\d{4}\b', text)
+        fallback_amounts = re.findall(r'₹?\d+(?:,\d+)*', text)
 
-            common_org_keywords = [
-                "ltd", "inc", "university", "corp",
-                "google", "microsoft", "nvidia"
-            ]
+        # merge fallback safely
+        entities["dates"] = list(set(entities.get("dates", []) + fallback_dates))
+        entities["amounts"] = list(set(entities.get("amounts", []) + fallback_amounts))
 
-            filtered_names = []
+        
+        names = entities.get("names", [])
+        orgs = entities.get("organizations", [])
 
-            for n in names:
-                if any(k in n.lower() for k in common_org_keywords):
-                    orgs.append(n)
-                else:
-                    filtered_names.append(n)
+        common_org_keywords = [
+            "ltd", "inc", "university", "corp",
+            "google", "microsoft", "nvidia"
+        ]
 
-            entities["names"] = filtered_names
-            entities["organizations"] = list(set(orgs))
+        filtered_names = []
 
-        except Exception as e:
-            print("[post-process error]", e)
+        for n in names:
+            if any(k in n.lower() for k in common_org_keywords):
+                orgs.append(n)
+            else:
+                filtered_names.append(n)
+
+        entities["names"] = filtered_names
+        entities["organizations"] = list(set(orgs))
 
         return {
             "summary": result.get("summary", ""),
@@ -154,6 +169,7 @@ def analyze_document(text: str) -> dict:
     except Exception as e:
         print(f"[Groq API error] {e}")
         raise RuntimeError(f"LLM analysis failed: {str(e)}")
+
 
 
 def analyze_image_directly(file_bytes: bytes) -> dict:
@@ -175,7 +191,17 @@ def analyze_image_directly(file_bytes: bytes) -> dict:
                     },
                     {
                         "type": "text",
-                        "text": """Return ONLY JSON:
+                        "text": """You are analyzing an image document.
+
+Extract:
+- detailed summary (2–4 sentences)
+- names (people only)
+- organizations
+- dates
+- amounts
+- sentiment
+
+Return ONLY JSON:
 {
   "summary": "",
   "entities": {
